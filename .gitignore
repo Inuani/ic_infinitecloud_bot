@@ -25,3 +25,5 @@ dist/
 
 repomix-output.txt
 canister_ids.json
+
+Cargo.lock

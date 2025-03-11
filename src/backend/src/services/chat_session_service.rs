@@ -10,12 +10,27 @@ use crate::{
     utils::{
         filesystem::root_path,
         messages::{
-            ask_directory_name_message, ask_file_name_message, ask_rename_file_message,
-            back_inline_keyboard, create_file_message, created_directory_success_message,
-            created_file_success_message, explorer_file_message, explorer_message, help_message,
-            info_message, mkdir_message, move_file_select_destination_message,
-            move_file_select_file_message, moved_file_success_message, rename_file_message,
-            renamed_file_success_message, start_message, COMING_SOON_TEXT,
+            ask_directory_name_message,
+            ask_file_name_message,
+            ask_rename_file_message,
+            back_inline_keyboard,
+            create_file_message,
+            created_directory_success_message,
+            created_file_success_message,
+            delete_file_message,
+            deleted_file_success_message,
+            // COMING_SOON_TEXT,
+            explorer_file_message,
+            explorer_message,
+            help_message,
+            info_message,
+            mkdir_message,
+            move_file_select_destination_message,
+            move_file_select_file_message,
+            moved_file_success_message,
+            rename_file_message,
+            renamed_file_success_message,
+            start_message,
         },
         MessageParams, TG_FILE_MIME_TYPE_PREFIX,
     },
@@ -109,6 +124,7 @@ impl<T: ChatSessionRepository, F: FilesystemService> ChatSessionService
             match Command::try_from(msg.clone()) {
                 Ok(command) => {
                     // when receiving a command, we want to reset the chat session
+                    let current_path = cs.current_path().clone();
                     cs.reset();
 
                     let mut send_message_params = MessageParams::new_send(chat_id.clone());
@@ -164,7 +180,17 @@ impl<T: ChatSessionRepository, F: FilesystemService> ChatSessionService
                             send_message_params.set_inline_keyboard_markup(keyboard);
                         }
                         Command::DeleteDir | Command::DeleteFile => {
-                            send_message_params.set_text(COMING_SOON_TEXT.to_string());
+                            // send_message_params.set_text(COMING_SOON_TEXT.to_string());
+                            cs.set_current_path(current_path);
+                            cs.set_action(ChatSessionAction::DeleteFile);
+
+                            send_message_params
+                                .set_text(delete_file_message(cs.current_path_string()));
+
+                            let keyboard = KeyboardDirectoryBuilder::new(&fs, cs.current_path())?
+                                .with_files()?
+                                .build();
+                            send_message_params.set_inline_keyboard_markup(keyboard);
                         }
                     }
 
@@ -502,7 +528,17 @@ impl<T: ChatSessionRepository, F: FilesystemService> ChatSessionService
                             edit_message_params.set_inline_keyboard_markup(keyboard);
 
                             Ok(edit_message_params)
-                        }
+                        },
+                        ChatSessionAction::DeleteFile => {
+                            cs.set_current_path(parent_path.to_path_buf());
+                            edit_message_params.set_text(delete_file_message(cs.current_path_string()));
+                            
+                            let keyboard = KeyboardDirectoryBuilder::new(&fs, parent_path)?
+                                .with_files()?
+                                .build();
+                            edit_message_params.set_inline_keyboard_markup(keyboard);
+                            Ok(edit_message_params)
+                        },
                         _ => action_not_supported_error(),
                     }
                 }
@@ -656,6 +692,39 @@ impl<T: ChatSessionRepository, F: FilesystemService> ChatSessionService
                         }
 
                         Ok(edit_message_params)
+                    }
+                    ChatSessionAction::DeleteFile => {
+                        let node = fs.get_node(&path)?;
+
+                        if node.is_directory() {
+                            cs.set_current_path(path.clone());
+                            edit_message_params
+                                .set_text(delete_file_message(cs.current_path_string()));
+
+                            let keyboard = KeyboardDirectoryBuilder::new(&fs, cs.current_path())?
+                                .with_files()?
+                                .build();
+                            edit_message_params.set_inline_keyboard_markup(keyboard);
+                            Ok(edit_message_params)
+                        } else {
+                            // Delete the file
+                            fs.remove_node(&path)?;
+
+                            let file_name = path
+                                .file_name()
+                                .ok_or_else(|| "File name not found".to_string())?
+                                .to_string_lossy()
+                                .to_string();
+
+                            edit_message_params.set_text(deleted_file_success_message(
+                                file_name,
+                                cs.current_path_string(),
+                            ));
+
+                            cs.reset();
+
+                            Ok(edit_message_params)
+                        }
                     }
                     _ => action_not_supported_error(),
                 },

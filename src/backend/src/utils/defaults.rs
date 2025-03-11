@@ -268,6 +268,19 @@ Select the directory in which you want to move the file and click _{CURRENT_DIR_
             inline_keyboard: vec![vec![back_inline_button()]],
         }
     }
+
+    pub fn deleted_file_success_message(file_name: String, path: String) -> String {
+        format!("File *{}* was successfully DELETED from `{}`", file_name, path)
+    }
+
+    pub fn delete_file_message(path: String) -> String {
+        format!(
+            r#"{}
+    
+    Select the file you want to DELETE:"#,
+            current_path_text(path)
+        )
+    }
 }
 
 pub mod http {

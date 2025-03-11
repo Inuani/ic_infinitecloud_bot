@@ -199,7 +199,30 @@ impl FileSystem {
         }
     }
 
-    fn remove_node(&mut self, path: &Path) -> Result<FileSystemNode, String> {
+    // fn remove_node(&mut self, path: &Path) -> Result<FileSystemNode, String> {
+    //     let parent = path.parent().ok_or("Invalid path")?;
+    //     let mut current = &mut self.root;
+    //     for component in parent.components().skip(1) {
+    //         // Skip root path
+    //         if let FileSystemNode::Directory { nodes, .. } = current {
+    //             current = nodes
+    //                 .entry(component.as_os_str().into())
+    //                 .or_insert_with(FileSystemNode::new_directory);
+    //         } else {
+    //             return Err("Parent is not a directory".to_string());
+    //         }
+    //     }
+    //     if let FileSystemNode::Directory { nodes, .. } = current {
+    //         let node_key: PathBuf = path.file_name().ok_or("Invalid file name")?.into();
+    //         nodes
+    //             .remove(&node_key)
+    //             .ok_or_else(|| "Node not found".to_string())
+    //     } else {
+    //         Err("Parent is not a directory".to_string())
+    //     }
+    // }
+
+    pub fn remove_node(&mut self, path: &Path) -> Result<FileSystemNode, String> {
         let parent = path.parent().ok_or("Invalid path")?;
         let mut current = &mut self.root;
         for component in parent.components().skip(1) {
