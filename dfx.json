@@ -1,0 +1,23 @@
+{
+  "canisters": {
+    "backend": {
+      "type": "custom",
+      "wasm": "./target/wasm32-unknown-unknown/release/backend.wasm",
+      "candid": "src/backend/backend.did",
+      "build": ["./scripts/build-canister.sh"],
+      "metadata": [
+        {
+          "name": "candid:service"
+        }
+      ]
+    }
+  },
+  "defaults": {
+    "build": {
+      "args": "",
+      "packtool": ""
+    }
+  },
+  "output_env_file": ".env",
+  "version": 1
+}
