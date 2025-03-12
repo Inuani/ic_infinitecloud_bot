@@ -12,7 +12,7 @@ pub mod messages {
 
     const GITHUB_REPO_URL: &str = "https://github.com/ilbertt/ic_infinitecloud_bot";
 
-    pub const COMING_SOON_TEXT: &str = "Coming soon...";
+    // pub const COMING_SOON_TEXT: &str = "Coming soon...";
 
     pub fn help_message() -> String {
         format!(
@@ -42,8 +42,11 @@ The flow is almost the same as to save files.
 Click on directories to navigate into them.
 Click on files to get the reference to the file.
 
-*DELETE FILES/DIRECTORIES* (/delete\_file and /delete\_dir):
-{COMING_SOON_TEXT}
+*DELETE FILES* (/delete\_file):
+Click on file to delete it.
+
+*DELETE DIRECTORIES* (/delete\_dir):
+Click on an empty directory to delete it. Non-empty directories cannot be deleted.
 
 Troubles? Open an issue on GitHub: [{GITHUB_REPO_URL}/issues]({GITHUB_REPO_URL}/issues)"#
         )
@@ -270,7 +273,10 @@ Select the directory in which you want to move the file and click _{CURRENT_DIR_
     }
 
     pub fn deleted_file_success_message(file_name: String, path: String) -> String {
-        format!("File *{}* was successfully DELETED from `{}`", file_name, path)
+        format!(
+            "File *{}* was successfully DELETED from `{}`",
+            file_name, path
+        )
     }
 
     pub fn delete_file_message(path: String) -> String {
@@ -280,6 +286,31 @@ Select the directory in which you want to move the file and click _{CURRENT_DIR_
     Select the file you want to DELETE:"#,
             current_path_text(path)
         )
+    }
+
+    const DELETE_DIR_TEXT: &str = "Select the directory you want to DELETE";
+
+    // Add the delete_dir_message function that was commented out
+    pub fn delete_dir_message(path: String) -> String {
+        format!(
+            r#"{}
+
+{DELETE_DIR_TEXT}"#,
+            current_path_text(path)
+        )
+    }
+
+    // Add the deleted_dir_success_message function
+    pub fn deleted_dir_success_message(dir_name: String, path: String) -> String {
+        format!(
+            "Directory *{}* was successfully DELETED from `{}`",
+            dir_name, path
+        )
+    }
+
+    // Add the cannot_delete_non_empty_dir_message function
+    pub fn cannot_delete_non_empty_dir_message(dir_name: String) -> String {
+        format!("Cannot delete directory *{}* because it is not empty. Please remove all files and subdirectories first.", dir_name)
     }
 }
 

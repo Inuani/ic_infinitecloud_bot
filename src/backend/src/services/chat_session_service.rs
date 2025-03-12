@@ -14,10 +14,13 @@ use crate::{
             ask_file_name_message,
             ask_rename_file_message,
             back_inline_keyboard,
+            cannot_delete_non_empty_dir_message,
             create_file_message,
             created_directory_success_message,
             created_file_success_message,
+            delete_dir_message,
             delete_file_message,
+            deleted_dir_success_message,
             deleted_file_success_message,
             // COMING_SOON_TEXT,
             explorer_file_message,
@@ -179,7 +182,17 @@ impl<T: ChatSessionRepository, F: FilesystemService> ChatSessionService
                                 .build();
                             send_message_params.set_inline_keyboard_markup(keyboard);
                         }
-                        Command::DeleteDir | Command::DeleteFile => {
+                        Command::DeleteDir => {
+                            cs.set_current_path(current_path);
+                            cs.set_action(ChatSessionAction::DeleteDir);
+                            send_message_params
+                                .set_text(delete_dir_message(cs.current_path_string()));
+
+                            let keyboard =
+                                KeyboardDirectoryBuilder::new(&fs, cs.current_path())?.build();
+                            send_message_params.set_inline_keyboard_markup(keyboard);
+                        }
+                        Command::DeleteFile => {
                             // send_message_params.set_text(COMING_SOON_TEXT.to_string());
                             cs.set_current_path(current_path);
                             cs.set_action(ChatSessionAction::DeleteFile);
@@ -528,17 +541,18 @@ impl<T: ChatSessionRepository, F: FilesystemService> ChatSessionService
                             edit_message_params.set_inline_keyboard_markup(keyboard);
 
                             Ok(edit_message_params)
-                        },
+                        }
                         ChatSessionAction::DeleteFile => {
                             cs.set_current_path(parent_path.to_path_buf());
-                            edit_message_params.set_text(delete_file_message(cs.current_path_string()));
-                            
+                            edit_message_params
+                                .set_text(delete_file_message(cs.current_path_string()));
+
                             let keyboard = KeyboardDirectoryBuilder::new(&fs, parent_path)?
                                 .with_files()?
                                 .build();
                             edit_message_params.set_inline_keyboard_markup(keyboard);
                             Ok(edit_message_params)
-                        },
+                        }
                         _ => action_not_supported_error(),
                     }
                 }
@@ -725,6 +739,53 @@ impl<T: ChatSessionRepository, F: FilesystemService> ChatSessionService
 
                             Ok(edit_message_params)
                         }
+                    }
+                    ChatSessionAction::DeleteDir => {
+                        let node = fs.get_node(&path)?;
+
+                        if node.is_directory() {
+                            let is_empty = match node {
+                                FileSystemNode::Directory { nodes, .. } => nodes.is_empty(),
+                                _ => false, // This shouldn't happen
+                            };
+
+                            if is_empty {
+                                // If directory is empty, delete it
+                                fs.remove_node(&path)?;
+
+                                let dir_name = path
+                                    .file_name()
+                                    .ok_or_else(|| "Directory name not found".to_string())?
+                                    .to_string_lossy()
+                                    .to_string();
+
+                                edit_message_params.set_text(deleted_dir_success_message(
+                                    dir_name,
+                                    cs.current_path_string(),
+                                ));
+
+                                cs.reset();
+                            } else {
+                                // If directory is not empty, show error
+                                edit_message_params.set_text(cannot_delete_non_empty_dir_message(
+                                    path.file_name()
+                                        .ok_or_else(|| "Directory name not found".to_string())?
+                                        .to_string_lossy()
+                                        .to_string(),
+                                ));
+
+                                // Keep the action and path so user can navigate back
+                                let keyboard = back_inline_keyboard();
+                                edit_message_params.set_inline_keyboard_markup(keyboard);
+                            }
+                        } else {
+                            // If it's not a directory, show error
+                            edit_message_params.set_text("This is not a directory.".to_string());
+                            let keyboard = back_inline_keyboard();
+                            edit_message_params.set_inline_keyboard_markup(keyboard);
+                        }
+
+                        Ok(edit_message_params)
                     }
                     _ => action_not_supported_error(),
                 },
