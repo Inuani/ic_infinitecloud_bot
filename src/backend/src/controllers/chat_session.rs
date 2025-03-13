@@ -16,6 +16,17 @@ fn get_chat_sessions_count() -> u32 {
     ChatSessionController::default().get_chat_sessions_count(calling_principal)
 }
 
+////////////////////
+// use ic_cdk::update;
+
+// #[update]
+// async fn trigger_webhook(webhook_url: String, message: String) -> String {
+//     // Call our test_webhook function
+//     crate::test_webhook(webhook_url, message).await
+// }
+////////////////////
+
+
 struct ChatSessionController<A: AccessControlService, C: ChatSessionService> {
     access_control_service: A,
     chat_session_service: C,
