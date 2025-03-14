@@ -22,6 +22,8 @@ service : {
   get_chat_sessions_count : () -> (nat32) query;
   http_request : (HttpRequest) -> (HttpResponse) query;
   http_request_update : (HttpUpdateRequest) -> (HttpResponse);
+  process_file_automation : (nat64, text) -> (text);
+  run_automation : (nat64, text) -> (text);
   send_webhook : (text) -> (text);
   transform : (TransformArgs) -> (HttpResponse) query;
 }

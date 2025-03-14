@@ -1,5 +1,7 @@
 use frankenstein::{Message, MessageEntityType};
 
+use crate::custom_print;
+
 #[derive(Debug)]
 pub enum Command {
     Start,
@@ -11,6 +13,7 @@ pub enum Command {
     MoveFile,
     DeleteDir,
     DeleteFile,
+    Automation,
 }
 
 impl TryFrom<Message> for Command {
@@ -21,10 +24,14 @@ impl TryFrom<Message> for Command {
             .text
             .ok_or_else(|| "No text in message".to_string())?;
 
+        custom_print!("Checking for command in message: {}", text_command);
+
         let entity = message
             .entities
             .and_then(|e| e.first().cloned())
             .ok_or_else(|| "No entities in message".to_string())?;
+
+        custom_print!("Entity type: {:?}", entity.type_field);
 
         if entity.type_field != MessageEntityType::BotCommand {
             return Err("No bot command in message".to_string());
@@ -33,6 +40,8 @@ impl TryFrom<Message> for Command {
         let offset = entity.offset as usize;
         let length = entity.length as usize;
         let command = &text_command[offset..offset + length];
+
+        custom_print!("Extracted command: {}", command);
 
         match command {
             "/start" => Ok(Command::Start),
@@ -44,6 +53,7 @@ impl TryFrom<Message> for Command {
             "/move_file" => Ok(Command::MoveFile),
             "/delete_dir" => Ok(Command::DeleteDir),
             "/delete_file" => Ok(Command::DeleteFile),
+            "/automation" => Ok(Command::Automation),
             _ => Err("Unknown command".to_string()),
         }
     }

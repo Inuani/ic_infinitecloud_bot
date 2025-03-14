@@ -216,24 +216,6 @@ Select the directory in which you want to move the file and click _{CURRENT_DIR_
         )
     }
 
-    //     pub fn delete_dir_message(path: String) -> String {
-    //         format!(
-    //             r#"{}
-
-    // {DELETE_DIR_TEXT}"#,
-    //             current_path_text(path)
-    //         )
-    //     }
-
-    //     pub fn delete_file_message(path: String) -> String {
-    //         format!(
-    //             r#"{}
-
-    // {DELETE_FILE_TEXT}"#,
-    //             current_path_text(path)
-    //         )
-    //     }
-
     pub fn generic_error_message() -> String {
         GENERIC_ERROR_TEXT.to_string()
     }
@@ -311,6 +293,27 @@ Select the directory in which you want to move the file and click _{CURRENT_DIR_
     // Add the cannot_delete_non_empty_dir_message function
     pub fn cannot_delete_non_empty_dir_message(dir_name: String) -> String {
         format!("Cannot delete directory *{}* because it is not empty. Please remove all files and subdirectories first.", dir_name)
+    }
+
+    pub fn automation_message(path: String) -> String {
+        format!(
+            r#"{}
+    
+    Running automation for the current directory. n8n will process files in this location."#,
+            current_path_text(path)
+        )
+    }
+    
+    pub fn automation_file_message(file_name: String, path: String) -> String {
+        format!("Running automation for file: *{file_name}*\nPath: `{path}`\n\nn8n has been notified and will process this file.")
+    }
+    
+    pub fn automation_success_message() -> String {
+        format!("Automation request sent successfully to n8n. The workflow will process your files shortly.")
+    }
+    
+    pub fn automation_error_message(error: String) -> String {
+        format!("Failed to trigger automation: {error}")
     }
 }
 

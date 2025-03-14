@@ -1,3 +1,3 @@
 mod chat_session;
 mod http;
-mod webhooks;
+pub(crate) mod webhooks;
