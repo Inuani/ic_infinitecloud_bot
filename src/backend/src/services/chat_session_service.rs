@@ -8,10 +8,18 @@ use crate::{
         ChatSessionRepositoryImpl, ChatSessionWaitReply, Command, FileSystem, FileSystemNode,
         FilesystemRepositoryImpl, KeyboardDirectoryBuilder, MessageId,
     },
+    services::webhook_service::send_directory_automation,
     utils::{
         filesystem::root_path,
         messages::{
-            self, ask_directory_name_message, ask_file_name_message, ask_rename_file_message, back_inline_keyboard, cannot_delete_non_empty_dir_message, create_file_message, created_directory_success_message, created_file_success_message, delete_dir_message, delete_file_message, deleted_dir_success_message, deleted_file_success_message, explorer_file_message, explorer_message, help_message, info_message, mkdir_message, move_file_select_destination_message, move_file_select_file_message, moved_file_success_message, rename_file_message, renamed_file_success_message, start_message
+            self, ask_directory_name_message, ask_file_name_message, ask_rename_file_message,
+            back_inline_keyboard, cannot_delete_non_empty_dir_message, create_file_message,
+            created_directory_success_message, created_file_success_message, delete_dir_message,
+            delete_file_message, deleted_dir_success_message, deleted_file_success_message,
+            explorer_file_message, explorer_message, help_message, info_message, mkdir_message,
+            move_file_select_destination_message, move_file_select_file_message,
+            moved_file_success_message, rename_file_message, renamed_file_success_message,
+            start_message,
         },
         MessageParams, TG_FILE_MIME_TYPE_PREFIX,
     },
@@ -70,7 +78,6 @@ impl Default
 impl<T: ChatSessionRepository, F: FilesystemService> ChatSessionService
     for ChatSessionServiceImpl<T, F>
 {
-
     fn get_filesystem_service(&self) -> &dyn FilesystemService {
         &self.filesystem_service
     }
@@ -200,35 +207,39 @@ impl<T: ChatSessionRepository, F: FilesystemService> ChatSessionService
                         Command::Automation => {
                             // Keep the current path
                             cs.set_current_path(current_path);
-                        
+
                             // Create the initial response message
                             send_message_params.set_text(format!(
                                 "Preparing to run automation for path:\n{}\n\nProcessing...",
                                 cs.current_path_string()
                             ));
-                        
+
                             // Set action to Explorer to keep UI consistent
                             cs.set_action(ChatSessionAction::Explorer);
-                        
+
                             // Add keyboard for navigation
                             let keyboard = KeyboardDirectoryBuilder::new(&fs, cs.current_path())?
                                 .with_files()?
                                 .build();
                             send_message_params.set_inline_keyboard_markup(keyboard);
-                        
+
                             // Get the values we need for the async operation
                             let chat_id_clone = chat_id.clone();
                             let path_clone = cs.current_path().to_path_buf();
                             let fs_clone = fs.clone();
-                        
+
                             // Spawn an async task to run the automation
                             ic_cdk::spawn(async move {
                                 let service = ChatSessionServiceImpl::default(); // Or inject it if possible
                                 let _ = service
-                                    .handle_automation_command(&chat_id_clone, &path_clone, &fs_clone)
+                                    .handle_automation_command(
+                                        &chat_id_clone,
+                                        &path_clone,
+                                        &fs_clone,
+                                    )
                                     .await;
                             });
-                        
+
                             return Ok(send_message_params);
                         }
                     }
@@ -857,73 +868,123 @@ impl<T: ChatSessionRepository, F: FilesystemService> ChatSessionService
         res
     }
 
-    // Add this function to the impl ChatSessionServiceImpl<T, F>
-// in src/backend/src/services/chat_session_service.rs
+    async fn handle_automation_command(
+        &self,
+        chat_id: &ChatId,
+        current_path: &PathBuf,
+        fs: &FileSystem,
+    ) -> Result<MessageParams, String> {
+        use crate::services::webhook_service::{send_file_automation, FileInfo};
 
-async fn handle_automation_command(
-    &self,
-    chat_id: &ChatId,
-    current_path: &PathBuf,
-    fs: &FileSystem,
-) -> Result<MessageParams, String> {
-    use crate::services::webhook_service::{FileInfo, send_file_automation};
-    
-    custom_print!("Starting automation for chat_id: {}, path: {:?}", chat_id, current_path);
-    
-    let node = fs.get_node(current_path)?;
-    
-    let mut send_message_params = MessageParams::new_send(chat_id.clone());
-    
-    match node {
-        FileSystemNode::File { message_id, size, mime_type, .. } => {
-            custom_print!("Processing automation for file at path: {:?}", current_path);
-            let file_name = current_path
-                .file_name()
-                .ok_or_else(|| "File name not found".to_string())?
-                .to_string_lossy()
-                .to_string();
-                
-            let file_info = FileInfo {
-                name: file_name.clone(),
-                path: current_path.to_string_lossy().to_string(),
-                message_id: *message_id,
-                mime_type: mime_type.clone(),
-                size: Some(*size),
-            };
-            
-            custom_print!("Before sending automation for path: {:?}", current_path);
-let result = send_file_automation(chat_id.0, None, current_path.clone(), None).await;
-custom_print!("Automation result: {}", result);
-            
-            send_message_params.set_text(
-                if result.contains("error") || result.contains("Failed") {
-                    messages::automation_error_message(result)
+        custom_print!(
+            "Starting automation for chat_id: {}, path: {:?}",
+            chat_id,
+            current_path
+        );
+
+        let node = fs.get_node(current_path)?;
+
+        let mut send_message_params = MessageParams::new_send(chat_id.clone());
+
+        match node {
+            FileSystemNode::File {
+                message_id,
+                size,
+                mime_type,
+                ..
+            } => {
+                custom_print!("Processing automation for file at path: {:?}", current_path);
+                let file_name = current_path
+                    .file_name()
+                    .ok_or_else(|| "File name not found".to_string())?
+                    .to_string_lossy()
+                    .to_string();
+
+                let file_info = FileInfo {
+                    name: file_name.clone(),
+                    path: current_path.to_string_lossy().to_string(),
+                    message_id: *message_id,
+                    mime_type: mime_type.clone(),
+                    size: Some(*size),
+                };
+
+                // Pass the file_info to send_file_automation
+                let result = send_file_automation(
+                    chat_id.0,
+                    Some(*message_id),
+                    current_path.clone(),
+                    Some(file_info),
+                )
+                .await;
+
+                send_message_params.set_text(
+                    if result.contains("error") || result.contains("Failed") {
+                        messages::automation_error_message(result)
+                    } else {
+                        messages::automation_file_message(
+                            file_name,
+                            current_path.to_string_lossy().to_string(),
+                        )
+                    },
+                );
+            }
+            FileSystemNode::Directory { .. } => {
+                custom_print!(
+                    "Processing automation for directory at path: {:?}",
+                    current_path
+                );
+
+                // Get all files in directory
+                let files_result = if let FileSystemNode::Directory { nodes, .. } = node {
+                    // Collect file information for all files in directory
+                    let mut file_infos = Vec::new();
+
+                    for (path, node) in nodes {
+                        if let FileSystemNode::File {
+                            message_id,
+                            size,
+                            mime_type,
+                            ..
+                        } = node
+                        {
+                            let full_path = current_path.join(path);
+                            let file_name = path.to_string_lossy().to_string();
+
+                            file_infos.push(FileInfo {
+                                name: file_name,
+                                path: full_path.to_string_lossy().to_string(),
+                                message_id: *message_id,
+                                mime_type: mime_type.clone(),
+                                size: Some(*size),
+                            });
+                        }
+                    }
+
+                    // Log the JSON separately (not in a match expression)
+                    if let Ok(json) = serde_json::to_string(&file_infos) {
+                        custom_print!("Found files: {}", json);
+                    } else {
+                        custom_print!("Error serializing file_infos");
+                    }
+
+                    // Use the special send_directory_automation function
+                    send_directory_automation(chat_id.0, current_path.clone(), file_infos).await
                 } else {
-                    messages::automation_file_message(file_name, current_path.to_string_lossy().to_string())
-                }
-            );
-        },
-        FileSystemNode::Directory { .. } => {
-            custom_print!("Processing automation for directory at path: {:?}", current_path);
-            let result = send_file_automation(
-                chat_id.0,
-                None,
-                current_path.clone(),
-                None
-            ).await;
-            
-            send_message_params.set_text(
-                if result.contains("error") || result.contains("Failed") {
-                    messages::automation_error_message(result)
-                } else {
-                    messages::automation_message(current_path.to_string_lossy().to_string())
-                }
-            );
-        },
+                    "Error: Not a directory".to_string()
+                };
+
+                send_message_params.set_text(
+                    if files_result.contains("error") || files_result.contains("Failed") {
+                        messages::automation_error_message(files_result)
+                    } else {
+                        messages::automation_message(current_path.to_string_lossy().to_string())
+                    },
+                );
+            }
+        }
+
+        Ok(send_message_params)
     }
-    
-    Ok(send_message_params)
-}
 }
 
 impl<T: ChatSessionRepository, F: FilesystemService> ChatSessionServiceImpl<T, F> {

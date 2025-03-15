@@ -308,9 +308,9 @@ Select the directory in which you want to move the file and click _{CURRENT_DIR_
         format!("Running automation for file: *{file_name}*\nPath: `{path}`\n\nn8n has been notified and will process this file.")
     }
     
-    pub fn automation_success_message() -> String {
-        format!("Automation request sent successfully to n8n. The workflow will process your files shortly.")
-    }
+    // pub fn automation_success_message() -> String {
+    //     format!("Automation request sent successfully to n8n. The workflow will process your files shortly.")
+    // }
     
     pub fn automation_error_message(error: String) -> String {
         format!("Failed to trigger automation: {error}")
