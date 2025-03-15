@@ -1,5 +1,6 @@
 use frankenstein::{CallbackQuery, MaybeInaccessibleMessage, Message};
 use std::path::PathBuf;
+use crate::services::{CommandService, CommandServiceImpl};
 
 use crate::{
     custom_print,
@@ -14,12 +15,11 @@ use crate::{
         messages::{
             self, ask_directory_name_message, ask_file_name_message, ask_rename_file_message,
             back_inline_keyboard, cannot_delete_non_empty_dir_message, create_file_message,
-            created_directory_success_message, created_file_success_message, delete_dir_message,
+            created_directory_success_message, created_file_success_message,
             delete_file_message, deleted_dir_success_message, deleted_file_success_message,
-            explorer_file_message, explorer_message, help_message, info_message, mkdir_message,
+            explorer_file_message, explorer_message, mkdir_message,
             move_file_select_destination_message, move_file_select_file_message,
             moved_file_success_message, rename_file_message, renamed_file_success_message,
-            start_message,
         },
         MessageParams, TG_FILE_MIME_TYPE_PREFIX,
     },
@@ -59,6 +59,7 @@ pub trait ChatSessionService {
 pub struct ChatSessionServiceImpl<T: ChatSessionRepository, F: FilesystemService> {
     chat_session_repository: T,
     filesystem_service: F,
+    command_service: CommandServiceImpl,
 }
 
 impl Default
@@ -71,6 +72,7 @@ impl Default
         Self::new(
             ChatSessionRepositoryImpl::default(),
             FilesystemServiceImpl::default(),
+            CommandServiceImpl::default(),
         )
     }
 }
@@ -114,8 +116,6 @@ impl<T: ChatSessionRepository, F: FilesystemService> ChatSessionService
         let mut fs = self.filesystem_service.get_or_create_filesystem(&chat_id);
         let mut chat_session = self.get_or_create_chat_session(&chat_id);
 
-        let from_user = msg.clone().from;
-
         let res = with_clear_action_on_error(&mut chat_session, |cs| {
             let current_path = cs.current_path().clone();
             custom_print!(
@@ -124,127 +124,21 @@ impl<T: ChatSessionRepository, F: FilesystemService> ChatSessionService
                     );
 
             match Command::try_from(msg.clone()) {
-                Ok(command) => {
-                    // when receiving a command, we want to reset the chat session
+                Ok(command) => {     
                     let current_path = cs.current_path().clone();
+                    // when receiving a command, we want to reset the chat session
                     cs.reset();
 
-                    let mut send_message_params = MessageParams::new_send(chat_id.clone());
-
                     match command {
-                        Command::Start => {
-                            send_message_params
-                                .set_text(start_message(from_user.map(|user| user.first_name)));
-                        }
-                        Command::Help => send_message_params.set_text(help_message()),
-                        Command::Info => send_message_params.set_text(info_message()),
-                        Command::MkDir => {
-                            cs.set_action(ChatSessionAction::MkDir(None));
-
-                            send_message_params.set_text(mkdir_message(cs.current_path_string()));
-
-                            let keyboard = KeyboardDirectoryBuilder::new(&fs, cs.current_path())?
-                                .with_current_dir_button()
-                                .build();
-                            send_message_params.set_inline_keyboard_markup(keyboard);
-                        }
-                        Command::Explorer => {
-                            cs.set_action(ChatSessionAction::Explorer);
-
-                            send_message_params
-                                .set_text(explorer_message(cs.current_path_string()));
-
-                            let keyboard = KeyboardDirectoryBuilder::new(&fs, cs.current_path())?
-                                .with_files()?
-                                .build();
-                            send_message_params.set_inline_keyboard_markup(keyboard);
-                        }
-                        Command::RenameFile => {
-                            cs.set_action(ChatSessionAction::RenameFile(None));
-
-                            send_message_params
-                                .set_text(rename_file_message(cs.current_path_string()));
-
-                            let keyboard = KeyboardDirectoryBuilder::new(&fs, cs.current_path())?
-                                .with_files()?
-                                .build();
-                            send_message_params.set_inline_keyboard_markup(keyboard);
-                        }
-                        Command::MoveFile => {
-                            cs.set_action(ChatSessionAction::MoveFile(None));
-
-                            send_message_params
-                                .set_text(move_file_select_file_message(cs.current_path_string()));
-
-                            let keyboard = KeyboardDirectoryBuilder::new(&fs, cs.current_path())?
-                                .with_files()?
-                                .build();
-                            send_message_params.set_inline_keyboard_markup(keyboard);
-                        }
-                        Command::DeleteDir => {
-                            cs.set_current_path(current_path);
-                            cs.set_action(ChatSessionAction::DeleteDir);
-                            send_message_params
-                                .set_text(delete_dir_message(cs.current_path_string()));
-
-                            let keyboard =
-                                KeyboardDirectoryBuilder::new(&fs, cs.current_path())?.build();
-                            send_message_params.set_inline_keyboard_markup(keyboard);
-                        }
-                        Command::DeleteFile => {
-                            // send_message_params.set_text(COMING_SOON_TEXT.to_string());
-                            cs.set_current_path(current_path);
-                            cs.set_action(ChatSessionAction::DeleteFile);
-
-                            send_message_params
-                                .set_text(delete_file_message(cs.current_path_string()));
-
-                            let keyboard = KeyboardDirectoryBuilder::new(&fs, cs.current_path())?
-                                .with_files()?
-                                .build();
-                            send_message_params.set_inline_keyboard_markup(keyboard);
-                        }
-                        Command::Automation => {
-                            // Keep the current path
-                            cs.set_current_path(current_path);
-
-                            // Create the initial response message
-                            send_message_params.set_text(format!(
-                                "Preparing to run automation for path:\n{}\n\nProcessing...",
-                                cs.current_path_string()
-                            ));
-
-                            // Set action to Explorer to keep UI consistent
-                            cs.set_action(ChatSessionAction::Explorer);
-
-                            // Add keyboard for navigation
-                            let keyboard = KeyboardDirectoryBuilder::new(&fs, cs.current_path())?
-                                .with_files()?
-                                .build();
-                            send_message_params.set_inline_keyboard_markup(keyboard);
-
-                            // Get the values we need for the async operation
-                            let chat_id_clone = chat_id.clone();
-                            let path_clone = cs.current_path().to_path_buf();
-                            let fs_clone = fs.clone();
-
-                            // Spawn an async task to run the automation
-                            ic_cdk::spawn(async move {
-                                let service = ChatSessionServiceImpl::default(); // Or inject it if possible
-                                let _ = service
-                                    .handle_automation_command(
-                                        &chat_id_clone,
-                                        &path_clone,
-                                        &fs_clone,
-                                    )
-                                    .await;
-                            });
-
-                            return Ok(send_message_params);
-                        }
+                        Command::DeleteDir | Command::DeleteFile | Command::Automation => {
+                            // These commands need to preserve the current path
+                            cs.set_current_path(current_path.clone());
+                        },
+                        _ => {}
                     }
-
-                    Ok(send_message_params)
+                    return self.command_service.handle_command(&chat_id, &command, cs, &fs);
+            
+                 
                 }
                 Err(_) => {
                     if let Some(text) = msg.text {
@@ -988,10 +882,11 @@ impl<T: ChatSessionRepository, F: FilesystemService> ChatSessionService
 }
 
 impl<T: ChatSessionRepository, F: FilesystemService> ChatSessionServiceImpl<T, F> {
-    fn new(chat_session_repository: T, filesystem_service: F) -> Self {
+    fn new(chat_session_repository: T, filesystem_service: F, command_service: CommandServiceImpl) -> Self {
         Self {
             chat_session_repository,
             filesystem_service,
+            command_service,
         }
     }
 
