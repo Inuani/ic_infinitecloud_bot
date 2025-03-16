@@ -1,26 +1,18 @@
 use frankenstein::{CallbackQuery, MaybeInaccessibleMessage, Message};
 use std::path::PathBuf;
-use crate::services::{CommandService, CommandServiceImpl};
 
 use crate::{
     custom_print,
     repositories::{
         with_clear_action_on_error, ChatId, ChatSession, ChatSessionAction, ChatSessionRepository,
-        ChatSessionRepositoryImpl, ChatSessionWaitReply, Command, FileSystem, FileSystemNode,
-        FilesystemRepositoryImpl, KeyboardDirectoryBuilder, MessageId,
+        ChatSessionRepositoryImpl, ChatSessionWaitReply, Command, FileSystem,
+        FilesystemRepositoryImpl, KeyboardDirectoryBuilder
     },
-    services::webhook_service::send_directory_automation,
+    services::{
+        CommandService, CommandServiceImpl, FileOperationService, FileOperationServiceImpl,
+    },
     utils::{
         filesystem::root_path,
-        messages::{
-            self, ask_directory_name_message, ask_file_name_message, ask_rename_file_message,
-            back_inline_keyboard, cannot_delete_non_empty_dir_message, create_file_message,
-            created_directory_success_message, created_file_success_message,
-            delete_file_message, deleted_dir_success_message, deleted_file_success_message,
-            explorer_file_message, explorer_message, mkdir_message,
-            move_file_select_destination_message, move_file_select_file_message,
-            moved_file_success_message, rename_file_message, renamed_file_success_message,
-        },
         MessageParams, TG_FILE_MIME_TYPE_PREFIX,
     },
 };
@@ -60,6 +52,7 @@ pub struct ChatSessionServiceImpl<T: ChatSessionRepository, F: FilesystemService
     chat_session_repository: T,
     filesystem_service: F,
     command_service: CommandServiceImpl,
+    file_operation_service: FileOperationServiceImpl,
 }
 
 impl Default
@@ -73,6 +66,7 @@ impl Default
             ChatSessionRepositoryImpl::default(),
             FilesystemServiceImpl::default(),
             CommandServiceImpl::default(),
+            FileOperationServiceImpl::default(),
         )
     }
 }
@@ -119,9 +113,9 @@ impl<T: ChatSessionRepository, F: FilesystemService> ChatSessionService
         let res = with_clear_action_on_error(&mut chat_session, |cs| {
             let current_path = cs.current_path().clone();
             custom_print!(
-                        "UpdateContent::Message: chat_id: {:?}, current_path: {:?}, current_action: {:?}, message.text: {:?}",
-                        chat_id, current_path, cs.action(), msg.text
-                    );
+                "UpdateContent::Message: chat_id: {:?}, current_path: {:?}, current_action: {:?}, message.text: {:?}",
+                chat_id, current_path, cs.action(), msg.text
+            );
 
             match Command::try_from(msg.clone()) {
                 Ok(command) => {     
@@ -137,8 +131,6 @@ impl<T: ChatSessionRepository, F: FilesystemService> ChatSessionService
                         _ => {}
                     }
                     return self.command_service.handle_command(&chat_id, &command, cs, &fs);
-            
-                 
                 }
                 Err(_) => {
                     if let Some(text) = msg.text {
@@ -147,66 +139,22 @@ impl<T: ChatSessionRepository, F: FilesystemService> ChatSessionService
                                 ChatSessionAction::MkDir(Some(
                                     ChatSessionWaitReply::DirectoryName,
                                 )) => {
-                                    let dir_name = text;
-                                    let dir_path = cs.current_path().join(&dir_name);
-                                    fs.mkdir(&dir_path)?;
-                                    cs.reset();
-
-                                    let mut send_message_params =
-                                        MessageParams::new_send(chat_id.clone());
-                                    send_message_params.set_text(
-                                        created_directory_success_message(
-                                            dir_name,
-                                            dir_path.to_string_lossy().to_string(),
-                                        ),
-                                    );
-                                    Ok(send_message_params)
+                                    self.file_operation_service.handle_mkdir_action(&chat_id, cs, &mut fs, text)
                                 }
                                 ChatSessionAction::SaveFile(
                                     Some(file_node),
                                     Some(ChatSessionWaitReply::FileName),
                                 ) => {
-                                    let file_name = text;
-                                    let dir_path = cs.current_path();
-                                    let file_path = dir_path.join(file_name);
-                                    let final_file_path =
-                                        fs.create_file_from_node(&file_path, file_node)?;
-                                    let mut send_message_params =
-                                        MessageParams::new_send(chat_id.clone());
-                                    send_message_params.set_text(created_file_success_message(
-                                        final_file_path
-                                            .file_name()
-                                            .unwrap()
-                                            .to_string_lossy()
-                                            .to_string(),
-                                        dir_path.to_string_lossy().to_string(),
-                                    ));
-                                    Ok(send_message_params)
+                                    self.file_operation_service.handle_save_file_action(&chat_id, cs, &mut fs, file_node, text)
                                 }
                                 ChatSessionAction::RenameFile(Some(
                                     ChatSessionWaitReply::FileName,
                                 )) => {
-                                    let new_file_name = text;
-                                    let from_path = cs.current_path();
-                                    let mut to_path = from_path.clone();
-                                    to_path.set_file_name(&new_file_name);
-                                    fs.mv(from_path, &to_path)?;
-                                    let mut send_message_params =
-                                        MessageParams::new_send(chat_id.clone());
-                                    send_message_params.set_text(renamed_file_success_message(
-                                        from_path
-                                            .file_name()
-                                            .unwrap()
-                                            .to_string_lossy()
-                                            .to_string(),
-                                        new_file_name,
-                                        from_path.parent().unwrap().to_string_lossy().to_string(),
-                                    ));
-                                    Ok(send_message_params)
+                                    self.file_operation_service.handle_rename_file_action(&chat_id, cs, &mut fs, text)
                                 }
                                 _ => Ok(MessageParams::generic_error(chat_id.clone())),
                             },
-                            None => process_file_message(
+                            None => self.file_operation_service.process_file_message(
                                 cs,
                                 &fs,
                                 chat_id.clone(),
@@ -215,10 +163,10 @@ impl<T: ChatSessionRepository, F: FilesystemService> ChatSessionService
                                 Some(format!("{TG_FILE_MIME_TYPE_PREFIX}text")),
                             ),
                         };
-                    };
+                    }
 
                     if let Some(document) = msg.document {
-                        return process_file_message(
+                        return self.file_operation_service.process_file_message(
                             cs,
                             &fs,
                             chat_id.clone(),
@@ -230,7 +178,7 @@ impl<T: ChatSessionRepository, F: FilesystemService> ChatSessionService
 
                     if let Some(photos) = msg.photo {
                         let photo = photos.first().unwrap();
-                        return process_file_message(
+                        return self.file_operation_service.process_file_message(
                             cs,
                             &fs,
                             chat_id.clone(),
@@ -241,7 +189,7 @@ impl<T: ChatSessionRepository, F: FilesystemService> ChatSessionService
                     }
 
                     if let Some(video) = msg.video {
-                        return process_file_message(
+                        return self.file_operation_service.process_file_message(
                             cs,
                             &fs,
                             chat_id.clone(),
@@ -252,7 +200,7 @@ impl<T: ChatSessionRepository, F: FilesystemService> ChatSessionService
                     }
 
                     if let Some(video_note) = msg.video_note {
-                        return process_file_message(
+                        return self.file_operation_service.process_file_message(
                             cs,
                             &fs,
                             chat_id.clone(),
@@ -263,7 +211,7 @@ impl<T: ChatSessionRepository, F: FilesystemService> ChatSessionService
                     }
 
                     if let Some(audio) = msg.audio {
-                        return process_file_message(
+                        return self.file_operation_service.process_file_message(
                             cs,
                             &fs,
                             chat_id.clone(),
@@ -274,7 +222,7 @@ impl<T: ChatSessionRepository, F: FilesystemService> ChatSessionService
                     }
 
                     if let Some(voice) = msg.voice {
-                        return process_file_message(
+                        return self.file_operation_service.process_file_message(
                             cs,
                             &fs,
                             chat_id.clone(),
@@ -285,7 +233,7 @@ impl<T: ChatSessionRepository, F: FilesystemService> ChatSessionService
                     }
 
                     if let Some(sticker) = msg.sticker {
-                        return process_file_message(
+                        return self.file_operation_service.process_file_message(
                             cs,
                             &fs,
                             chat_id.clone(),
@@ -296,7 +244,7 @@ impl<T: ChatSessionRepository, F: FilesystemService> ChatSessionService
                     }
 
                     if msg.contact.is_some() {
-                        return process_file_message(
+                        return self.file_operation_service.process_file_message(
                             cs,
                             &fs,
                             chat_id.clone(),
@@ -338,12 +286,12 @@ impl<T: ChatSessionRepository, F: FilesystemService> ChatSessionService
             };
 
             custom_print!(
-                    "UpdateContent::CallbackQuery: chat_id: {:?}, current_path: {:?}, current_action: {:?}, action: {:?}",
-                    chat_id,
-                    cs.current_path(),
-                    cs.action(),
-                    action
-                );
+                "UpdateContent::CallbackQuery: chat_id: {:?}, current_path: {:?}, current_action: {:?}, action: {:?}",
+                chat_id,
+                cs.current_path(),
+                cs.action(),
+                action
+            );
 
             let mut edit_message_params = MessageParams::new_edit(chat_id.clone(), message_id);
             let current_action = cs.action().ok_or_else(|| {
@@ -356,9 +304,8 @@ impl<T: ChatSessionRepository, F: FilesystemService> ChatSessionService
                         cs.set_action(ChatSessionAction::MkDir(Some(
                             ChatSessionWaitReply::DirectoryName,
                         )));
-                        edit_message_params
-                            .set_text(ask_directory_name_message(cs.current_path_string()));
-                        edit_message_params.set_inline_keyboard_markup(back_inline_keyboard());
+                        edit_message_params.set_text(crate::utils::messages::ask_directory_name_message(cs.current_path_string()));
+                        edit_message_params.set_inline_keyboard_markup(crate::utils::messages::back_inline_keyboard());
 
                         Ok(edit_message_params)
                     }
@@ -367,26 +314,21 @@ impl<T: ChatSessionRepository, F: FilesystemService> ChatSessionService
                             Some(file_node),
                             Some(ChatSessionWaitReply::FileName),
                         ));
-                        edit_message_params
-                            .set_text(ask_file_name_message(cs.current_path_string()));
-                        edit_message_params.set_inline_keyboard_markup(back_inline_keyboard());
+                        edit_message_params.set_text(crate::utils::messages::ask_file_name_message(cs.current_path_string()));
+                        edit_message_params.set_inline_keyboard_markup(crate::utils::messages::back_inline_keyboard());
 
                         Ok(edit_message_params)
                     }
                     ChatSessionAction::MoveFile(Some(from_path)) => {
-                        let file_name =
-                            from_path.file_name().unwrap().to_string_lossy().to_string();
-                        let to_path = cs.current_path().join(&file_name);
-                        fs.mv(&from_path, &to_path)?;
-
-                        edit_message_params.set_text(moved_file_success_message(
-                            file_name,
-                            from_path.to_string_lossy().to_string(),
-                            to_path.to_string_lossy().to_string(),
-                        ));
-                        Ok(edit_message_params)
+                        let to_path = cs.current_path().clone();
+                        self.file_operation_service.handle_move_file_action(&chat_id, &from_path, &to_path, &mut fs)
+                            .map(|params| {
+                                // Transfer message text to edit message
+                                edit_message_params.set_text(params.json_value().unwrap()["text"].as_str().unwrap().to_string());
+                                edit_message_params
+                            })
                     }
-                    _ => action_not_supported_error(),
+                    _ => crate::services::file_operation_service::action_not_supported_error(),
                 },
                 ChatSessionAction::ParentDir => {
                     let current_path = cs.current_path().clone();
@@ -399,8 +341,7 @@ impl<T: ChatSessionRepository, F: FilesystemService> ChatSessionService
 
                             if node.is_directory() {
                                 cs.set_current_path(parent_path.to_path_buf());
-                                edit_message_params
-                                    .set_text(explorer_message(cs.current_path_string()));
+                                edit_message_params.set_text(crate::utils::messages::explorer_message(cs.current_path_string()));
 
                                 let keyboard = KeyboardDirectoryBuilder::new(&fs, parent_path)?
                                     .with_files()?
@@ -415,7 +356,7 @@ impl<T: ChatSessionRepository, F: FilesystemService> ChatSessionService
                         }
                         ChatSessionAction::MkDir(_) => {
                             cs.set_current_path(parent_path.to_path_buf());
-                            edit_message_params.set_text(mkdir_message(cs.current_path_string()));
+                            edit_message_params.set_text(crate::utils::messages::mkdir_message(cs.current_path_string()));
 
                             let keyboard = KeyboardDirectoryBuilder::new(&fs, parent_path)?
                                 .with_current_dir_button()
@@ -425,8 +366,7 @@ impl<T: ChatSessionRepository, F: FilesystemService> ChatSessionService
                         }
                         ChatSessionAction::SaveFile(Some(_), None) => {
                             cs.set_current_path(parent_path.to_path_buf());
-                            edit_message_params
-                                .set_text(create_file_message(cs.current_path_string()));
+                            edit_message_params.set_text(crate::utils::messages::create_file_message(cs.current_path_string()));
 
                             let keyboard = KeyboardDirectoryBuilder::new(&fs, parent_path)?
                                 .with_current_dir_button()
@@ -436,8 +376,7 @@ impl<T: ChatSessionRepository, F: FilesystemService> ChatSessionService
                         }
                         ChatSessionAction::RenameFile(_) => {
                             cs.set_current_path(parent_path.to_path_buf());
-                            edit_message_params
-                                .set_text(rename_file_message(cs.current_path_string()));
+                            edit_message_params.set_text(crate::utils::messages::rename_file_message(cs.current_path_string()));
 
                             let keyboard = KeyboardDirectoryBuilder::new(&fs, parent_path)?
                                 .with_files()?
@@ -450,7 +389,7 @@ impl<T: ChatSessionRepository, F: FilesystemService> ChatSessionService
 
                             let (message_text, keyboard) = match from_path {
                                 Some(from_path) => {
-                                    let msg = move_file_select_destination_message(
+                                    let msg = crate::utils::messages::move_file_select_destination_message(
                                         from_path.to_string_lossy().to_string(),
                                     );
                                     let keyboard =
@@ -461,7 +400,7 @@ impl<T: ChatSessionRepository, F: FilesystemService> ChatSessionService
                                 }
                                 None => {
                                     let msg =
-                                        move_file_select_file_message(cs.current_path_string());
+                                    crate::utils::messages::move_file_select_file_message(cs.current_path_string());
                                     let keyboard = KeyboardDirectoryBuilder::new(&fs, parent_path)?
                                         .with_files()?
                                         .build();
@@ -475,8 +414,7 @@ impl<T: ChatSessionRepository, F: FilesystemService> ChatSessionService
                         }
                         ChatSessionAction::DeleteFile => {
                             cs.set_current_path(parent_path.to_path_buf());
-                            edit_message_params
-                                .set_text(delete_file_message(cs.current_path_string()));
+                            edit_message_params.set_text(crate::utils::messages::delete_file_message(cs.current_path_string()));
 
                             let keyboard = KeyboardDirectoryBuilder::new(&fs, parent_path)?
                                 .with_files()?
@@ -484,48 +422,30 @@ impl<T: ChatSessionRepository, F: FilesystemService> ChatSessionService
                             edit_message_params.set_inline_keyboard_markup(keyboard);
                             Ok(edit_message_params)
                         }
-                        _ => action_not_supported_error(),
+                        _ => crate::services::file_operation_service::action_not_supported_error(),
                     }
-                }
+                },
                 ChatSessionAction::FileOrDir(path) => match current_action {
                     ChatSessionAction::Explorer => {
                         let node = fs.get_node(&path)?;
 
                         if node.is_directory() {
                             cs.set_current_path(path.clone());
-                            edit_message_params
-                                .set_text(explorer_message(cs.current_path_string()));
+                            edit_message_params.set_text(crate::utils::messages::explorer_message(cs.current_path_string()));
 
                             let keyboard = KeyboardDirectoryBuilder::new(&fs, &path)?
                                 .with_files()?
                                 .build();
                             edit_message_params.set_inline_keyboard_markup(keyboard);
+                            Ok(edit_message_params)
                         } else {
-                            // reply to the file
-                            let message_id = node
-                                .file_message_id()
-                                .ok_or_else(|| "Message id not found".to_string())?;
-                            let file_name = path
-                                .file_name()
-                                .ok_or_else(|| "File name not found".to_string())?
-                                .to_string_lossy()
-                                .to_string();
-
-                            let mut send_message_params = MessageParams::new_send(chat_id.clone());
-                            send_message_params.set_text(explorer_file_message(
-                                file_name,
-                                cs.current_path_string(),
-                            ));
-                            send_message_params.set_reply_to_message_id(message_id)?;
-
-                            return Ok(send_message_params);
+                            // Use the FileOperationService to handle the file explorer
+                            self.file_operation_service.handle_explorer_action(&chat_id, &path, &fs)
                         }
-
-                        Ok(edit_message_params)
                     }
                     ChatSessionAction::MkDir(_) => {
                         cs.set_current_path(path.clone());
-                        edit_message_params.set_text(mkdir_message(cs.current_path_string()));
+                        edit_message_params.set_text(crate::utils::messages::mkdir_message(cs.current_path_string()));
 
                         let keyboard = KeyboardDirectoryBuilder::new(&fs, &path)?
                             .with_current_dir_button()
@@ -535,7 +455,7 @@ impl<T: ChatSessionRepository, F: FilesystemService> ChatSessionService
                     }
                     ChatSessionAction::SaveFile(Some(_), None) => {
                         cs.set_current_path(path.clone());
-                        edit_message_params.set_text(create_file_message(cs.current_path_string()));
+                        edit_message_params.set_text(crate::utils::messages::create_file_message(cs.current_path_string()));
 
                         let keyboard = KeyboardDirectoryBuilder::new(&fs, &path)?
                             .with_current_dir_button()
@@ -548,15 +468,15 @@ impl<T: ChatSessionRepository, F: FilesystemService> ChatSessionService
 
                         if node.is_directory() {
                             cs.set_current_path(path.clone());
-                            edit_message_params
-                                .set_text(rename_file_message(cs.current_path_string()));
+                            edit_message_params.set_text(crate::utils::messages::rename_file_message(cs.current_path_string()));
 
                             let keyboard = KeyboardDirectoryBuilder::new(&fs, cs.current_path())?
                                 .with_files()?
                                 .build();
                             edit_message_params.set_inline_keyboard_markup(keyboard);
+                            Ok(edit_message_params)
                         } else {
-                            // reply to the file
+                            // Handle rename file operation
                             let message_id = node
                                 .file_message_id()
                                 .ok_or_else(|| "Message id not found".to_string())?;
@@ -567,7 +487,7 @@ impl<T: ChatSessionRepository, F: FilesystemService> ChatSessionService
                                 .to_string();
 
                             let mut send_message_params = MessageParams::new_send(chat_id.clone());
-                            send_message_params.set_text(ask_rename_file_message(
+                            send_message_params.set_text(crate::utils::messages::ask_rename_file_message(
                                 file_name,
                                 cs.current_path_string(),
                             ));
@@ -580,8 +500,6 @@ impl<T: ChatSessionRepository, F: FilesystemService> ChatSessionService
 
                             return Ok(send_message_params);
                         }
-
-                        Ok(edit_message_params)
                     }
                     ChatSessionAction::MoveFile(from_path) => {
                         let node = fs.get_node(&path)?;
@@ -591,7 +509,7 @@ impl<T: ChatSessionRepository, F: FilesystemService> ChatSessionService
 
                             let (message_text, keyboard) = match from_path {
                                 Some(from_path) => {
-                                    let msg = move_file_select_destination_message(
+                                    let msg = crate::utils::messages::move_file_select_destination_message(
                                         from_path.to_string_lossy().to_string(),
                                     );
                                     let keyboard =
@@ -602,7 +520,7 @@ impl<T: ChatSessionRepository, F: FilesystemService> ChatSessionService
                                 }
                                 None => {
                                     let msg =
-                                        move_file_select_file_message(cs.current_path_string());
+                                    crate::utils::messages::move_file_select_file_message(cs.current_path_string());
                                     let keyboard =
                                         KeyboardDirectoryBuilder::new(&fs, cs.current_path())?
                                             .with_files()?
@@ -612,8 +530,9 @@ impl<T: ChatSessionRepository, F: FilesystemService> ChatSessionService
                             };
                             edit_message_params.set_text(message_text);
                             edit_message_params.set_inline_keyboard_markup(keyboard);
+                            Ok(edit_message_params)
                         } else {
-                            // reply to the file
+                            // Handle move file selection
                             let message_id = node
                                 .file_message_id()
                                 .ok_or_else(|| "Message id not found".to_string())?;
@@ -622,7 +541,7 @@ impl<T: ChatSessionRepository, F: FilesystemService> ChatSessionService
                             cs.set_current_path(root_path());
 
                             let mut send_message_params = MessageParams::new_send(chat_id.clone());
-                            send_message_params.set_text(move_file_select_destination_message(
+                            send_message_params.set_text(crate::utils::messages::move_file_select_destination_message(
                                 from_path.to_string_lossy().to_string(),
                             ));
                             send_message_params.set_reply_to_message_id(message_id)?;
@@ -635,16 +554,13 @@ impl<T: ChatSessionRepository, F: FilesystemService> ChatSessionService
 
                             return Ok(send_message_params);
                         }
-
-                        Ok(edit_message_params)
                     }
                     ChatSessionAction::DeleteFile => {
                         let node = fs.get_node(&path)?;
 
                         if node.is_directory() {
                             cs.set_current_path(path.clone());
-                            edit_message_params
-                                .set_text(delete_file_message(cs.current_path_string()));
+                            edit_message_params.set_text(crate::utils::messages::delete_file_message(cs.current_path_string()));
 
                             let keyboard = KeyboardDirectoryBuilder::new(&fs, cs.current_path())?
                                 .with_files()?
@@ -652,79 +568,62 @@ impl<T: ChatSessionRepository, F: FilesystemService> ChatSessionService
                             edit_message_params.set_inline_keyboard_markup(keyboard);
                             Ok(edit_message_params)
                         } else {
-                            // Delete the file
-                            fs.remove_node(&path)?;
-
-                            let file_name = path
-                                .file_name()
-                                .ok_or_else(|| "File name not found".to_string())?
-                                .to_string_lossy()
-                                .to_string();
-
-                            edit_message_params.set_text(deleted_file_success_message(
-                                file_name,
-                                cs.current_path_string(),
-                            ));
-
+                            // Delete the file using FileOperationService
+                            let result = self.file_operation_service.handle_delete_file_action(
+                                &chat_id, 
+                                &path, 
+                                cs.current_path(),
+                                &mut fs
+                            )?;
+                            
+                            // Convert send message to edit message format
+                            if let Ok(value) = result.json_value() {
+                                edit_message_params.set_text(value["text"].as_str().unwrap().to_string());
+                            }
+                            
                             cs.reset();
-
+                            
                             Ok(edit_message_params)
                         }
                     }
                     ChatSessionAction::DeleteDir => {
-                        let node = fs.get_node(&path)?;
-
-                        if node.is_directory() {
-                            let is_empty = match node {
-                                FileSystemNode::Directory { nodes, .. } => nodes.is_empty(),
-                                _ => false, // This shouldn't happen
-                            };
-
-                            if is_empty {
-                                // If directory is empty, delete it
-                                fs.remove_node(&path)?;
-
-                                let dir_name = path
-                                    .file_name()
-                                    .ok_or_else(|| "Directory name not found".to_string())?
-                                    .to_string_lossy()
-                                    .to_string();
-
-                                edit_message_params.set_text(deleted_dir_success_message(
-                                    dir_name,
-                                    cs.current_path_string(),
-                                ));
-
-                                cs.reset();
-                            } else {
-                                // If directory is not empty, show error
-                                edit_message_params.set_text(cannot_delete_non_empty_dir_message(
-                                    path.file_name()
-                                        .ok_or_else(|| "Directory name not found".to_string())?
-                                        .to_string_lossy()
-                                        .to_string(),
-                                ));
-
-                                // Keep the action and path so user can navigate back
-                                let keyboard = back_inline_keyboard();
-                                edit_message_params.set_inline_keyboard_markup(keyboard);
+                        // Use FileOperationService to handle delete directory
+                        let result = self.file_operation_service.handle_delete_dir_action(
+                            &chat_id,
+                            &path,
+                            cs.current_path(),
+                            &mut fs
+                        )?;
+                        
+                        // Convert send message to edit message format
+                        if let Ok(value) = result.json_value() {
+                            edit_message_params.set_text(value["text"].as_str().unwrap().to_string());
+                            
+                            // If keyboard is set in the result, copy it
+                            if let Some(reply_markup) = value.get("reply_markup") {
+                                if let Some(keyboard) = reply_markup.get("inline_keyboard") {
+                                    // Parse the keyboard and set it
+                                    let keyboard_str = keyboard.to_string();
+                                    let keyboard: frankenstein::InlineKeyboardMarkup = serde_json::from_str(&keyboard_str).unwrap();
+                                    edit_message_params.set_inline_keyboard_markup(keyboard);
+                                }
                             }
-                        } else {
-                            // If it's not a directory, show error
-                            edit_message_params.set_text("This is not a directory.".to_string());
-                            let keyboard = back_inline_keyboard();
-                            edit_message_params.set_inline_keyboard_markup(keyboard);
                         }
-
+                        
+                        // Only reset if directory was successfully deleted
+                        if !edit_message_params.json_value().unwrap()["text"].as_str().unwrap().contains("cannot") {
+                            cs.reset();
+                        }
+                        
                         Ok(edit_message_params)
                     }
-                    _ => action_not_supported_error(),
+                    _ => crate::services::file_operation_service::action_not_supported_error(),
                 },
                 ChatSessionAction::Back => match current_action {
                     ChatSessionAction::MkDir(Some(_)) => {
                         cs.set_action(ChatSessionAction::MkDir(None));
 
-                        edit_message_params.set_text(mkdir_message(cs.current_path_string()));
+                        edit_message_params.set_text(crate::utils::messages::mkdir_message(cs.current_path_string()));
 
                         let keyboard = KeyboardDirectoryBuilder::new(&fs, cs.current_path())?
                             .with_current_dir_button()
@@ -736,7 +635,7 @@ impl<T: ChatSessionRepository, F: FilesystemService> ChatSessionService
                     ChatSessionAction::SaveFile(Some(file_node), Some(_)) => {
                         cs.set_action(ChatSessionAction::SaveFile(Some(file_node), None));
 
-                        edit_message_params.set_text(create_file_message(cs.current_path_string()));
+                        edit_message_params.set_text(crate::utils::messages::create_file_message(cs.current_path_string()));
 
                         let keyboard = KeyboardDirectoryBuilder::new(&fs, cs.current_path())?
                             .with_current_dir_button()
@@ -745,7 +644,7 @@ impl<T: ChatSessionRepository, F: FilesystemService> ChatSessionService
 
                         Ok(edit_message_params)
                     }
-                    _ => action_not_supported_error(),
+                    _ => crate::services::file_operation_service::action_not_supported_error(),
                 },
                 ChatSessionAction::DeleteDir
                 | ChatSessionAction::Explorer
@@ -768,125 +667,22 @@ impl<T: ChatSessionRepository, F: FilesystemService> ChatSessionService
         current_path: &PathBuf,
         fs: &FileSystem,
     ) -> Result<MessageParams, String> {
-        use crate::services::webhook_service::{send_file_automation, FileInfo};
-
-        custom_print!(
-            "Starting automation for chat_id: {}, path: {:?}",
-            chat_id,
-            current_path
-        );
-
-        let node = fs.get_node(current_path)?;
-
-        let mut send_message_params = MessageParams::new_send(chat_id.clone());
-
-        match node {
-            FileSystemNode::File {
-                message_id,
-                size,
-                mime_type,
-                ..
-            } => {
-                custom_print!("Processing automation for file at path: {:?}", current_path);
-                let file_name = current_path
-                    .file_name()
-                    .ok_or_else(|| "File name not found".to_string())?
-                    .to_string_lossy()
-                    .to_string();
-
-                let file_info = FileInfo {
-                    name: file_name.clone(),
-                    path: current_path.to_string_lossy().to_string(),
-                    message_id: *message_id,
-                    mime_type: mime_type.clone(),
-                    size: Some(*size),
-                };
-
-                // Pass the file_info to send_file_automation
-                let result = send_file_automation(
-                    chat_id.0,
-                    Some(*message_id),
-                    current_path.clone(),
-                    Some(file_info),
-                )
-                .await;
-
-                send_message_params.set_text(
-                    if result.contains("error") || result.contains("Failed") {
-                        messages::automation_error_message(result)
-                    } else {
-                        messages::automation_file_message(
-                            file_name,
-                            current_path.to_string_lossy().to_string(),
-                        )
-                    },
-                );
-            }
-            FileSystemNode::Directory { .. } => {
-                custom_print!(
-                    "Processing automation for directory at path: {:?}",
-                    current_path
-                );
-
-                // Get all files in directory
-                let files_result = if let FileSystemNode::Directory { nodes, .. } = node {
-                    // Collect file information for all files in directory
-                    let mut file_infos = Vec::new();
-
-                    for (path, node) in nodes {
-                        if let FileSystemNode::File {
-                            message_id,
-                            size,
-                            mime_type,
-                            ..
-                        } = node
-                        {
-                            let full_path = current_path.join(path);
-                            let file_name = path.to_string_lossy().to_string();
-
-                            file_infos.push(FileInfo {
-                                name: file_name,
-                                path: full_path.to_string_lossy().to_string(),
-                                message_id: *message_id,
-                                mime_type: mime_type.clone(),
-                                size: Some(*size),
-                            });
-                        }
-                    }
-
-                    // Log the JSON separately (not in a match expression)
-                    if let Ok(json) = serde_json::to_string(&file_infos) {
-                        custom_print!("Found files: {}", json);
-                    } else {
-                        custom_print!("Error serializing file_infos");
-                    }
-
-                    // Use the special send_directory_automation function
-                    send_directory_automation(chat_id.0, current_path.clone(), file_infos).await
-                } else {
-                    "Error: Not a directory".to_string()
-                };
-
-                send_message_params.set_text(
-                    if files_result.contains("error") || files_result.contains("Failed") {
-                        messages::automation_error_message(files_result)
-                    } else {
-                        messages::automation_message(current_path.to_string_lossy().to_string())
-                    },
-                );
-            }
-        }
-
-        Ok(send_message_params)
+        self.file_operation_service.handle_file_automation(chat_id, current_path, fs).await
     }
 }
 
 impl<T: ChatSessionRepository, F: FilesystemService> ChatSessionServiceImpl<T, F> {
-    fn new(chat_session_repository: T, filesystem_service: F, command_service: CommandServiceImpl) -> Self {
+    fn new(
+        chat_session_repository: T, 
+        filesystem_service: F, 
+        command_service: CommandServiceImpl,
+        file_operation_service: FileOperationServiceImpl,
+    ) -> Self {
         Self {
             chat_session_repository,
             filesystem_service,
             command_service,
+            file_operation_service,
         }
     }
 
@@ -900,32 +696,4 @@ impl<T: ChatSessionRepository, F: FilesystemService> ChatSessionServiceImpl<T, F
         self.filesystem_service
             .update_filesystem(&chat_id, filesystem);
     }
-}
-
-fn process_file_message(
-    chat_session: &mut ChatSession,
-    fs: &FileSystem,
-    chat_id: ChatId,
-    message_id: MessageId,
-    file_size: Option<u64>,
-    mime_type: Option<String>,
-) -> Result<MessageParams, String> {
-    // we reset the chat session to start the flow of saving a new file
-    chat_session.reset();
-
-    let file_node = FileSystemNode::new_file(message_id, file_size.unwrap_or(0), mime_type);
-    chat_session.set_action(ChatSessionAction::SaveFile(Some(file_node), None));
-
-    let mut send_message_params = MessageParams::new_send(chat_id.clone());
-    send_message_params.set_text(create_file_message(chat_session.current_path_string()));
-    let keyboard = KeyboardDirectoryBuilder::new(fs, chat_session.current_path())?
-        .with_current_dir_button()
-        .build();
-    send_message_params.set_inline_keyboard_markup(keyboard);
-
-    Ok(send_message_params)
-}
-
-fn action_not_supported_error() -> Result<MessageParams, String> {
-    Err("current action not supported by this action".to_string())
 }
